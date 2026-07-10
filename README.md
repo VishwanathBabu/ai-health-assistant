@@ -49,11 +49,6 @@ Instead of relying solely on an LLM, the system retrieves relevant information f
 
 ---
 
-# 🏗️ System Architecture
-
-![Architecture](assets/architecture.png)
-
----
 
 # 🔄 Workflow
 
@@ -185,12 +180,6 @@ For detailed setup instructions, refer to **docs/EXECUTION_GUIDE.md**.
 
 # 📸 Screenshots
 
-## System Architecture
-
-![Architecture](assets/architecture.png)
-
----
-
 ## Swagger UI
 
 ![Swagger](assets/swagger.png)
@@ -209,11 +198,6 @@ For detailed setup instructions, refer to **docs/EXECUTION_GUIDE.md**.
 
 ---
 
-## Semantic Search
-
-![Search](assets/search.png)
-
----
 
 ## Chat Response
 

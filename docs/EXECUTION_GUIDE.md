@@ -1,862 +1,1478 @@
-# AI Health Assistant — Phase 2
+# AI Health Assistant – Execution Guide
 
-A multi-agent AI health assistant with **RAG (Retrieval-Augmented Generation)** built on FastAPI, Ollama, and Qdrant.
+This guide explains how to set up, configure, and run the AI Health Assistant locally.
 
----
+The application uses:
 
-## What's New in Phase 2
+- FastAPI
+- Ollama (Llama 3)
+- Qdrant Vector Database
+- Sentence Transformers
+- Retrieval-Augmented Generation (RAG)
 
-Phase 1 gave you a multi-agent pipeline (Router → Symptom → Emergency → Safety). Phase 2 adds:
-
-- **Document upload** — POST `/documents/upload` accepts `.txt`, `.pdf`, `.md`
-- **Vector indexing** — POST `/documents/index` chunks files and stores them in Qdrant
-- **Semantic search** — GET `/knowledge/search` retrieves relevant medical passages
-- **RAG in chat** — POST `/chat` retrieves relevant knowledge before generating responses
-- **Qdrant health check** — `/health/ready` now also verifies Qdrant connectivity
-
-The chat endpoint still works with `use_rag=false` if Qdrant is unavailable.
+This guide assumes a Windows environment, but the steps are similar for Linux and macOS.
 
 ---
 
-## Architecture
+# Prerequisites
 
-```
-POST /chat
-    │
-    ├── KnowledgeStore.search()   ← Phase 2: retrieve relevant chunks from Qdrant
-    │
-    ├── RouterAgent               ← classify intent
-    │
-    ├── SymptomAgent (if routed)  ← extract symptom structure
-    │
-    ├── EmergencyAgent (always)   ← detect emergencies
-    │
-    └── SafetyAgent (always last) ← compose final response + inject RAG context
-```
+Before starting, ensure the following software is installed.
 
-Document pipeline:
+| Software | Version |
+|------------|---------|
+| Python | 3.10 or later |
+| Git | Latest |
+| Ollama | Latest |
+| Qdrant | v1.18+ |
+| VS Code (Recommended) | Latest |
 
-```
-POST /documents/upload  →  saves file to documents/uploads/
-POST /documents/index   →  chunker → sentence-transformers → Qdrant upsert
-GET  /knowledge/search  →  query → embed → Qdrant search → ranked chunks
-```
+Verify your installations.
 
----
+## Python
 
-## ⚕️ Medical Disclaimer
-
-This system does **not** provide medical diagnosis, prescription advice, or treatment plans. Always consult a qualified healthcare professional.
-
----
-
-# Complete Execution Guide
-
-## Step 1 — Project Setup
-
-**Python version required: 3.10 or higher**
-
-Verify Python version:
-```
+```bash
 python --version
 ```
-Expected output:
-```
-Python 3.10.x  (or 3.11.x, 3.12.x)
+
+Expected:
+
+```text
+Python 3.10.x
 ```
 
-If Python is missing, download from https://www.python.org/downloads/ and tick "Add Python to PATH" during installation.
+---
 
-Navigate to the project folder:
-```
-cd ai_health_assistant
-```
+## Git
 
-Create a virtual environment:
-```
-python -m venv venv
+```bash
+git --version
 ```
 
-Activate the virtual environment (Windows):
+Expected:
+
+```text
+git version 2.x.x
 ```
+
+---
+
+## Clone the Repository
+
+```bash
+git clone https://github.com/VishwanathBabu/ai-health-assistant.git
+
+cd ai-health-assistant
+```
+
+---
+
+# Project Structure
+
+```
+ai-health-assistant/
+│
+├── agents/
+├── assets/
+├── core/
+├── docs/
+├── documents/
+│   └── uploads/
+├── knowledge/
+├── tests/
+│
+├── Dockerfile
+├── main.py
+├── requirements.txt
+├── README.md
+└── .env.example
+```
+
+---
+
+# Create a Virtual Environment
+
+Create a Python virtual environment.
+
+```bash
+py -3.10 -m venv venv
+```
+
+Activate it.
+
+## Windows
+
+```bash
 venv\Scripts\activate
 ```
 
-Your terminal prompt should now show `(venv)` on the left.
+Your terminal should now display
 
-Upgrade pip:
+```text
+(venv)
 ```
+
+Upgrade pip.
+
+```bash
 python -m pip install --upgrade pip
 ```
 
-Install all dependencies:
-```
+---
+
+# Install Dependencies
+
+Install all project dependencies.
+
+```bash
 pip install -r requirements.txt
 ```
 
-This installs FastAPI, Uvicorn, Qdrant client, sentence-transformers (~500 MB total), pypdf, and all test dependencies.
+This installs:
+
+- FastAPI
+- Uvicorn
+- Sentence Transformers
+- Qdrant Client
+- PyPDF
+- Pytest
+- Structlog
+- Pydantic
+- Other required packages
+
+Installation may take several minutes during the first setup because machine learning libraries are downloaded.
 
 ---
 
-## Step 2 — Ollama
+# Environment Configuration
 
-**Check if Ollama is installed:**
-```
-ollama --version
-```
-
-**If Ollama is not installed:**
-
-Go to https://ollama.com/download, download the Windows installer, and run it. Ollama installs as a background service.
-
-**Pull the required model:**
-```
-ollama pull llama3
-```
-
-This downloads approximately 4.7 GB. Wait for it to finish.
-
-**Verify the model exists:**
-```
-ollama list
-```
-
-Expected output:
-```
-NAME               ID              SIZE    MODIFIED
-llama3:latest      365c0bd3c000    4.7 GB  2 minutes ago
-```
-
-**Verify Ollama is running:**
-```
-curl http://localhost:11434/api/generate -d "{\"model\":\"llama3\",\"prompt\":\"say ok\",\"stream\":false}"
-```
-
-Expected output (something like):
-```json
-{"model":"llama3","response":"ok","done":true,...}
-```
-
-If you get "connection refused", start Ollama manually:
-```
-ollama serve
-```
-
----
-
-## Step 3 — Qdrant
-
-Qdrant does **not** require Docker. Use the native Windows binary.
-
-**Download Qdrant:**
-
-Go to https://github.com/qdrant/qdrant/releases and download the latest `qdrant-x86_64-pc-windows-msvc.zip`.
-
-**Extract and run:**
-```
-cd C:\qdrant
-qdrant.exe
-```
-
-Or with explicit config path:
-```
-qdrant.exe --config-path config.yaml
-```
-
-**Verify Qdrant is running:**
-
-Open a new terminal and run:
-```
-curl http://localhost:6333/healthz
-```
-
-Expected output:
-```
-"healthz check passed"
-```
-
-Also verify via the dashboard: open http://localhost:6333/dashboard in your browser. You should see the Qdrant UI with an empty collections list.
-
-**Alternative — Docker (if you already have Docker Desktop):**
-```
-docker pull qdrant/qdrant
-docker run -p 6333:6333 -p 6334:6334 -v %cd%\qdrant_storage:/qdrant/storage qdrant/qdrant
-```
-
-Expected Docker output:
-```
-...
-Qdrant gRPC listening on 6334
-Qdrant HTTP listening on 6333
-```
-
----
-
-## Step 4 — Environment Variables
-
-The `.env` file lives in the **project root** alongside `main.py`:
+Create a `.env` file in the project root.
 
 ```
-ai_health_assistant/
-├── .env          ← here
+ai-health-assistant/
+│
+├── .env
 ├── main.py
-├── requirements.txt
+├── README.md
 └── ...
 ```
 
-**Every variable explained:**
+You can copy the example configuration.
 
-| Variable | Default | Modify? | Purpose |
-|---|---|---|---|
-| `LLM_PROVIDER` | `ollama` | Yes | Which LLM: `ollama`, `openai`, `anthropic` |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | No (unless custom port) | Ollama server URL |
-| `OLLAMA_MODEL` | `llama3` | Yes | Any model you've pulled |
-| `OPENAI_API_KEY` | _(blank)_ | Yes | Required if using OpenAI |
-| `OPENAI_MODEL` | `gpt-4o` | Yes | OpenAI model name |
-| `ANTHROPIC_API_KEY` | _(blank)_ | Yes | Required if using Anthropic |
-| `ANTHROPIC_MODEL` | `claude-sonnet-4-20250514` | Yes | Anthropic model name |
-| `AGENT_TEMPERATURE` | `0.1` | Yes | 0.0 = deterministic, 1.0 = creative |
-| `AGENT_MAX_TOKENS` | `1024` | Yes | Max response length per agent call |
-| `AGENT_TIMEOUT_SECONDS` | `60` | Yes | Per-agent timeout |
-| `LOG_LEVEL` | `INFO` | Yes | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `LOG_FORMAT` | `console` | Yes | `console` or `json` |
-| `API_HOST` | `0.0.0.0` | No | Listen on all interfaces |
-| `API_PORT` | `8000` | Yes | HTTP port |
-| `API_RELOAD` | `true` | No (set false for production) | Hot reload |
-| `QDRANT_URL` | `http://localhost:6333` | No (unless custom host) | Qdrant URL |
-| `QDRANT_COLLECTION` | `medical_docs` | No | Vector collection name |
+```bash
+copy .env.example .env
+```
 
-**Do not change** `QDRANT_URL`, `QDRANT_COLLECTION`, `API_HOST`, or `OLLAMA_BASE_URL` unless you have a specific reason (e.g. remote Qdrant server).
+or
+
+```bash
+cp .env.example .env
+```
 
 ---
 
-## Step 5 — Document Ingestion
+## Example Configuration
 
-Place your medical documents in the `documents/uploads/` folder.
+```env
+LLM_PROVIDER=ollama
 
-**Supported formats:** `.txt`, `.pdf`, `.md`
+OLLAMA_BASE_URL=http://localhost:11434
 
-**Option A — Copy files manually:**
-```
-copy C:\my_docs\diabetes_guide.pdf ai_health_assistant\documents\uploads\
-copy C:\my_docs\fever_treatment.txt ai_health_assistant\documents\uploads\
-```
+OLLAMA_MODEL=llama3
 
-**Option B — Upload via API (server must be running first):**
-```
-curl -X POST http://localhost:8000/documents/upload -F "file=@C:\my_docs\diabetes_guide.pdf"
-```
+QDRANT_URL=http://localhost:6333
 
-**Build embeddings and create the vector database:**
-```
-curl -X POST "http://localhost:8000/documents/index"
-```
+QDRANT_COLLECTION=medical_docs
 
-To wipe the collection and re-index from scratch:
-```
-curl -X POST "http://localhost:8000/documents/index?recreate=true"
+LOG_LEVEL=INFO
+
+API_HOST=0.0.0.0
+
+API_PORT=8000
+
+API_RELOAD=true
 ```
 
-**Expected response:**
+---
+
+## Important Environment Variables
+
+| Variable | Description |
+|------------|-------------|
+| LLM_PROVIDER | Selects the language model provider |
+| OLLAMA_MODEL | Local model to use |
+| OLLAMA_BASE_URL | Ollama server address |
+| QDRANT_URL | Vector database URL |
+| QDRANT_COLLECTION | Collection used for document embeddings |
+| API_PORT | FastAPI server port |
+| LOG_LEVEL | Logging verbosity |
+
+The default values are suitable for local development and usually do not need to be modified.
+
+---
+
+# Verify Python Environment
+
+Run:
+
+```bash
+python --version
+```
+
+```bash
+python -m pip --version
+```
+
+Both commands should point to your virtual environment.
+
+Example:
+
+```text
+Python 3.10.11
+
+pip .../ai-health-assistant/venv/Lib/site-packages
+```
+
+If they point to a global Python installation instead, recreate the virtual environment before continuing.
+
+---
+
+# Next Step
+
+Proceed to installing the required services:
+
+- Ollama
+- Qdrant
+
+# Installing Ollama
+
+The AI Health Assistant uses **Ollama** to run a local Large Language Model (LLM). No cloud API key is required when using Ollama.
+
+---
+
+## Step 1 — Install Ollama
+
+Download the latest installer from:
+
+https://ollama.com/download
+
+Run the installer and complete the installation.
+
+---
+
+## Step 2 — Verify Installation
+
+Open a terminal and run:
+
+```bash
+ollama --version
+```
+
+Expected output:
+
+```text
+ollama version x.x.x
+```
+
+---
+
+## Step 3 — Download the Llama 3 Model
+
+Pull the required model:
+
+```bash
+ollama pull llama3
+```
+
+The model is approximately **4–5 GB**, so the initial download may take several minutes.
+
+---
+
+## Step 4 — Verify the Model
+
+```bash
+ollama list
+```
+
+Example:
+
+```text
+NAME             SIZE
+llama3:latest    4.7 GB
+```
+
+---
+
+## Step 5 — Start Ollama
+
+If Ollama is not already running:
+
+```bash
+ollama serve
+```
+
+Expected output:
+
+```text
+Listening on 127.0.0.1:11434
+```
+
+Leave this terminal running.
+
+---
+
+## Step 6 — Verify the API
+
+Open another terminal and run:
+
+```bash
+curl http://localhost:11434/api/tags
+```
+
+If you receive JSON describing the installed models, Ollama is running correctly.
+
+---
+
+# Installing Qdrant
+
+Qdrant stores vector embeddings for semantic search.
+
+---
+
+## Option 1 — Native Windows Installation (Recommended)
+
+Download the latest Windows release:
+
+https://github.com/qdrant/qdrant/releases
+
+Extract the archive.
+
+Run:
+
+```bash
+qdrant.exe
+```
+
+The server starts on:
+
+```text
+http://localhost:6333
+```
+
+---
+
+## Verify Qdrant
+
+Open your browser:
+
+```
+http://localhost:6333
+```
+
+You should see something similar to:
+
 ```json
 {
-  "status": "ok",
-  "files_processed": 2,
-  "files_succeeded": 2,
-  "total_chunks_indexed": 47,
-  "recreated": false,
-  "results": [
-    {"source": "diabetes_guide.pdf", "chunks_created": 28, "status": "ok"},
-    {"source": "fever_treatment.txt", "chunks_created": 19, "status": "ok"}
-  ]
+    "title":"qdrant - vector search engine",
+    "version":"1.x.x"
 }
 ```
 
-On first run, the sentence-transformers model (`all-MiniLM-L6-v2`, ~80 MB) downloads automatically. Allow 1–2 minutes.
+Health check:
 
-**Verify indexing:**
-```
-curl "http://localhost:8000/knowledge/search?q=fever+symptoms&top_k=3"
+```bash
+curl http://localhost:6333/healthz
 ```
 
-If the response contains `results` with non-empty text, indexing succeeded.
+Expected:
+
+```text
+healthz check passed
+```
 
 ---
 
-## Step 6 — Start the Backend
+## View Collections
 
-Make sure your terminal is in the project root (where `main.py` lives) and the venv is active.
-
-```
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```text
+http://localhost:6333/collections
 ```
 
-**Successful startup log:**
-```
-INFO  Loading config from: ..\.env
-INFO  Using local Ollama backend (no API key required).
-INFO  Ollama URL: http://localhost:11434 | model: llama3
-INFO  LLM provider: ollama | model: llama3
-INFO  Qdrant connected at http://localhost:6333 — collection 'medical_docs' ready.
-INFO  Initialising orchestrator and agents…
-INFO  Orchestrator ready — all agents initialised.
-INFO  Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-```
+Initially, the list will be empty.
 
-If Qdrant is not running, you will see:
-```
-WARNING  Qdrant NOT reachable at http://localhost:6333. RAG features will be unavailable. Chat still works.
-```
-
-The server starts regardless. RAG endpoints return 503 but `/chat` still works.
+After indexing documents, your collection will appear here.
 
 ---
 
-## Step 7 — API Verification
+# Running the Application
 
-### GET /health
+Once both Ollama and Qdrant are running, start the FastAPI application.
 
-**curl:**
+Activate the virtual environment if necessary.
+
+```bash
+venv\Scripts\activate
 ```
-curl http://localhost:8000/health
+
+Run:
+
+```bash
+python -m uvicorn main:app --reload
 ```
 
-**Postman:** GET `http://localhost:8000/health`
+Expected startup log:
 
-**Expected response:**
+```text
+INFO: Uvicorn running on http://127.0.0.1:8000
+INFO: Application startup complete.
+```
+
+---
+
+# Open Swagger UI
+
+Once the application starts successfully, open:
+
+```
+http://localhost:8000/docs
+```
+
+Swagger UI allows you to test every API endpoint directly from your browser.
+
+---
+
+# Health Checks
+
+## Basic Health Check
+
+```
+GET /health
+```
+
+Example:
+
+```
+http://localhost:8000/health
+```
+
+Expected response:
+
 ```json
 {
-  "status": "ok",
-  "service": "AI Health Assistant",
-  "version": "2.0.0",
-  "provider": "ollama",
-  "model": "llama3",
-  "rag_enabled": true
+    "status":"ok"
 }
 ```
 
 ---
 
-### GET /health/ready
+## Readiness Check
 
-**curl:**
 ```
-curl http://localhost:8000/health/ready
-```
-
-**Postman:** GET `http://localhost:8000/health/ready`
-
-**Expected response (all systems up):**
-```json
-{
-  "status": "ready",
-  "llm_provider": "ollama",
-  "model": "llama3",
-  "llm_reachable": true,
-  "qdrant_reachable": true,
-  "qdrant_collection": {
-    "name": "medical_docs",
-    "vectors_count": 47,
-    "points_count": 47,
-    "status": "green"
-  }
-}
+GET /health/ready
 ```
 
-**If Qdrant is down**, `qdrant_reachable` is `false` but status is still `200` as long as the LLM works.
-**If Ollama is down**, response is `503`.
+Example:
+
+```
+http://localhost:8000/health/ready
+```
+
+The readiness endpoint verifies:
+
+- FastAPI
+- Ollama
+- Qdrant
+
+If all services are available, the API returns a successful response.
 
 ---
 
-### POST /documents/upload
+# First-Time Setup Checklist
 
-**curl:**
-```
-curl -X POST http://localhost:8000/documents/upload -F "file=@C:\path\to\diabetes.pdf"
-```
+Before proceeding, confirm:
 
-**Postman:** POST `http://localhost:8000/documents/upload` → Body → form-data → key `file` (type File) → select file
+- Python virtual environment is activated
+- Dependencies are installed
+- Ollama is running
+- Llama 3 model has been downloaded
+- Qdrant is running
+- FastAPI starts successfully
+- Swagger UI opens correctly
 
-**Expected response:**
-```json
-{
-  "status": "uploaded",
-  "filename": "diabetes.pdf",
-  "size_kb": 142.5,
-  "message": "File saved. Call POST /documents/index to build the vector store."
-}
-```
+# Uploading Medical Documents
 
----
+The AI Health Assistant uses Retrieval-Augmented Generation (RAG) by indexing medical documents into a Qdrant vector database.
 
-### POST /documents/index
+Supported document formats:
 
-**curl:**
-```
-curl -X POST "http://localhost:8000/documents/index"
-```
-
-**With recreate (full re-index):**
-```
-curl -X POST "http://localhost:8000/documents/index?recreate=true"
-```
-
-**Postman:** POST `http://localhost:8000/documents/index` (no body needed)
-
-**Expected response:**
-```json
-{
-  "status": "ok",
-  "files_processed": 1,
-  "files_succeeded": 1,
-  "total_chunks_indexed": 28,
-  "recreated": false
-}
-```
+- PDF (`.pdf`)
+- Text (`.txt`)
+- Markdown (`.md`)
 
 ---
 
-### GET /knowledge/search
+# Option 1 — Upload Using Swagger UI
 
-**curl:**
+Open:
+
 ```
-curl "http://localhost:8000/knowledge/search?q=diabetes+treatment&top_k=3"
+http://localhost:8000/docs
 ```
 
-**Postman:** GET `http://localhost:8000/knowledge/search` → Params: `q=diabetes treatment`, `top_k=3`
+Locate:
 
-**Expected response:**
+```
+POST /documents/upload
+```
+
+Click **Try it out**.
+
+Choose a medical document from your computer.
+
+Click **Execute**.
+
+A successful upload returns a response similar to:
+
 ```json
 {
-  "query": "diabetes treatment",
-  "results_count": 3,
-  "results": [
-    {
-      "text": "Type 2 diabetes is managed through...",
-      "source": "diabetes_guide.pdf",
-      "title": "Diabetes Guide",
-      "section": "Treatment",
-      "chunk_index": 5,
-      "score": 0.8732
-    }
-  ]
+    "status": "uploaded",
+    "filename": "influenza.pdf"
 }
 ```
 
 ---
 
-### POST /chat
+# Option 2 — Upload Using cURL
 
-**curl:**
-```
-curl -X POST http://localhost:8000/chat ^
-  -H "Content-Type: application/json" ^
-  -d "{\"message\": \"I have had a headache and fever for 2 days\", \"use_rag\": true}"
+```bash
+curl -X POST http://localhost:8000/documents/upload ^
+-F "file=@C:\Users\YourName\Documents\influenza.pdf"
 ```
 
-**Postman:** POST `http://localhost:8000/chat` → Body → raw JSON:
+---
+
+# Build the Vector Database
+
+Uploading a document only stores the file.
+
+To make it searchable, create vector embeddings.
+
+Execute:
+
+```
+POST /documents/index
+```
+
+from Swagger
+
+or
+
+```bash
+curl -X POST http://localhost:8000/documents/index
+```
+
+---
+
+## Successful Response
+
 ```json
 {
-  "message": "I have had a headache and fever for 2 days",
-  "use_rag": true
+    "status":"ok",
+    "files_processed":1,
+    "files_succeeded":1,
+    "total_chunks_indexed":24
 }
 ```
 
-**Expected response:**
+Depending on document size, indexing may take a few seconds.
+
+---
+
+# Semantic Search
+
+The semantic search endpoint retrieves the most relevant document chunks using vector similarity.
+
+```
+GET /knowledge/search
+```
+
+Example:
+
+```
+http://localhost:8000/knowledge/search?q=influenza symptoms&top_k=3
+```
+
+---
+
+## Example Response
+
 ```json
 {
-  "response": "Thank you for sharing how you're feeling...\n\n---\n⚕️ Medical Disclaimer...",
-  "sources_used": ["fever_treatment.txt"],
-  "rag_active": true
+    "query":"influenza symptoms",
+    "results_count":3,
+    "results":[
+        {
+            "source":"influenza.pdf",
+            "score":0.89,
+            "text":"Influenza commonly presents with fever, cough, sore throat, muscle aches..."
+        }
+    ]
+}
+```
+
+If no documents have been indexed, the results list will be empty.
+
+---
+
+# Chat Endpoint
+
+The `/chat` endpoint is the primary interface for interacting with the assistant.
+
+```
+POST /chat
+```
+
+---
+
+## Request Body
+
+```json
+{
+    "message":"What are the symptoms of influenza?",
+    "use_rag":true
+}
+```
+
+When `use_rag` is set to `true`, the assistant retrieves relevant information from the indexed documents before generating a response.
+
+---
+
+## Example Response
+
+```json
+{
+    "response":"Influenza commonly causes fever, cough, sore throat, fatigue, headache, muscle aches, and chills...",
+    "sources_used":[
+        "influenza.pdf"
+    ],
+    "rag_active":true
 }
 ```
 
 ---
 
-## Step 8 — Testing
+# Testing with Postman
 
-Run the full test suite (Phase 1 + Phase 2):
+## Upload Document
+
+**Method**
+
 ```
+POST
+```
+
+**URL**
+
+```
+http://localhost:8000/documents/upload
+```
+
+**Body**
+
+Select
+
+```
+form-data
+```
+
+Create one field:
+
+| Key | Type |
+|------|------|
+| file | File |
+
+Choose your PDF.
+
+Click **Send**.
+
+---
+
+# Index Documents
+
+**Method**
+
+```
+POST
+```
+
+**URL**
+
+```
+http://localhost:8000/documents/index
+```
+
+No request body is required.
+
+Click **Send**.
+
+---
+
+# Search Documents
+
+**Method**
+
+```
+GET
+```
+
+**URL**
+
+```
+http://localhost:8000/knowledge/search
+```
+
+Parameters
+
+| Key | Value |
+|------|-------|
+| q | influenza symptoms |
+| top_k | 3 |
+
+---
+
+# Chat
+
+**Method**
+
+```
+POST
+```
+
+**URL**
+
+```
+http://localhost:8000/chat
+```
+
+**Body**
+
+Raw JSON
+
+```json
+{
+    "message":"Summarize influenza including symptoms, transmission, prevention, and treatment.",
+    "use_rag":true
+}
+```
+
+---
+
+# Swagger UI
+
+Swagger is available at
+
+```
+http://localhost:8000/docs
+```
+
+Using Swagger, you can
+
+- Upload documents
+- Build embeddings
+- Perform semantic search
+- Chat with the assistant
+- Verify API responses
+
+No additional tools are required.
+
+---
+
+# Typical Workflow
+
+The recommended workflow is:
+
+```
+Start Ollama
+
+↓
+
+Start Qdrant
+
+↓
+
+Start FastAPI
+
+↓
+
+Upload Documents
+
+↓
+
+Build Index
+
+↓
+
+Verify Semantic Search
+
+↓
+
+Use Chat Endpoint
+```
+
+---
+
+# Docker Support
+
+The project includes a Dockerfile for containerized execution.
+
+> **Note:** Docker is optional. The project can be run directly using Python, Ollama, and Qdrant.
+
+---
+
+## Build the Docker Image
+
+Navigate to the project root and run:
+
+```bash
+docker build -t ai-health-assistant .
+```
+
+---
+
+## Run the Container
+
+```bash
+docker run -p 8000:8000 ai-health-assistant
+```
+
+The application will be available at:
+
+```
+http://localhost:8000
+```
+
+> Ensure Ollama and Qdrant are running before starting the container, unless you have configured them as Docker services.
+
+---
+
+# Running Unit Tests
+
+The project includes unit tests covering the AI agents, RAG pipeline, and API functionality.
+
+Run all tests:
+
+```bash
 pytest tests/ -v
 ```
 
-Run only Phase 1 tests:
+Example output:
+
+```text
+======================== test session starts ========================
+
+tests/test_mvp.py ..................... PASSED
+tests/test_phase2.py ................. PASSED
+
+======================== 35 passed ========================
 ```
+
+---
+
+## Run Individual Test Files
+
+Run only the AI agent tests:
+
+```bash
 pytest tests/test_mvp.py -v
 ```
 
-Run only Phase 2 tests:
-```
+Run only the RAG tests:
+
+```bash
 pytest tests/test_phase2.py -v
 ```
 
-Run with coverage:
-```
-pytest tests/ -v --cov=. --cov-report=term-missing
-```
+---
 
-**Successful output looks like:**
-```
-tests/test_mvp.py::TestRouterAgent::test_normal_symptom_query PASSED
-tests/test_mvp.py::TestRouterAgent::test_emergency_routing PASSED
-...
-tests/test_phase2.py::TestChunker::test_basic_chunking_returns_chunks PASSED
-tests/test_phase2.py::TestKnowledgeStore::test_ping_returns_true_when_qdrant_up PASSED
-...
-========== 35 passed in 4.21s ==========
+## Run with Coverage
+
+```bash
+pytest --cov=. --cov-report=term-missing
 ```
 
-All tests use mocked LLM and Qdrant calls. No real Ollama or Qdrant server is needed to run tests.
+Coverage reports help identify untested sections of the codebase.
 
 ---
 
-## Step 9 — Troubleshooting
+# Repository Structure
 
----
-
-**Problem:** `Connection refused` when calling `/health/ready` or `/chat`
-**Cause:** FastAPI server is not running.
-**Solution:** Run `uvicorn main:app --reload --host 0.0.0.0 --port 8000` in the project root with the venv active.
-
----
-
-**Problem:** `Ollama not running` — readiness check returns `503`
-**Cause:** Ollama process stopped.
-**Solution:** Open a new terminal and run `ollama serve`. Then retry `/health/ready`.
-
----
-
-**Problem:** `model not found` error from Ollama
-**Cause:** The model was never pulled, or was pulled with a different tag.
-**Solution:** Run `ollama pull llama3`. Verify with `ollama list`.
-
----
-
-**Problem:** `Qdrant NOT reachable` warning in startup log
-**Cause:** Qdrant is not running on port 6333.
-**Solution:** Start Qdrant with `qdrant.exe` (or `docker run qdrant/qdrant`). Re-run `curl http://localhost:6333/healthz` to confirm it's up, then restart FastAPI.
-
----
-
-**Problem:** Port 8000 already in use — `ERROR: [Errno 10048] Only one usage of each socket address`
-**Cause:** Another process is already on port 8000.
-**Solution (find and kill):**
 ```
+ai-health-assistant/
+
+├── agents/
+│   ├── base_agent.py
+│   ├── emergency_agent.py
+│   ├── router_agent.py
+│   ├── safety_agent.py
+│   └── symptom_agent.py
+│
+├── assets/
+│   ├── architecture.png
+│   ├── swagger.png
+│   ├── upload.png
+│   ├── indexing.png
+│   ├── search.png
+│   ├── chat.png
+│   └── qdrant.png
+│
+├── core/
+│   ├── config.py
+│   ├── logger.py
+│   └── orchestrator.py
+│
+├── documents/
+│   └── uploads/
+│
+├── knowledge/
+│   ├── chunker.py
+│   ├── ingestion.py
+│   └── store.py
+│
+├── tests/
+│   ├── test_mvp.py
+│   └── test_phase2.py
+│
+├── docs/
+│   └── EXECUTION_GUIDE.md
+│
+├── Dockerfile
+├── main.py
+├── README.md
+├── requirements.txt
+└── .env.example
+```
+
+---
+
+# Demonstration Assets
+
+The repository includes screenshots demonstrating the application.
+
+| Screenshot | Description |
+|------------|-------------|
+| architecture.png | High-level system architecture |
+| swagger.png | Swagger UI |
+| upload.png | Document upload endpoint |
+| indexing.png | Successful document indexing |
+| search.png | Semantic search results |
+| chat.png | AI chat response using RAG |
+| qdrant.png | Qdrant collection metadata |
+
+These images are displayed in the main `README.md`.
+
+---
+
+# Recommended Startup Order
+
+Whenever you start the project locally, follow this order:
+
+1. Activate the Python virtual environment.
+2. Start Ollama.
+3. Start Qdrant.
+4. Launch FastAPI.
+5. Upload medical documents.
+6. Build the vector index.
+7. Test semantic search.
+8. Start chatting with the assistant.
+
+Following this sequence ensures all services are available before the application begins processing requests.
+
+---
+
+# Useful Commands
+
+Activate the virtual environment:
+
+```bash
+venv\Scripts\activate
+```
+
+Start the FastAPI server:
+
+```bash
+python -m uvicorn main:app --reload
+```
+
+Run tests:
+
+```bash
+pytest tests/ -v
+```
+
+Check Ollama models:
+
+```bash
+ollama list
+```
+
+Start Ollama manually:
+
+```bash
+ollama serve
+```
+
+Check Qdrant health:
+
+```bash
+curl http://localhost:6333/healthz
+```
+
+Open Swagger UI:
+
+```
+http://localhost:8000/docs
+```
+
+---
+
+# Git Workflow
+
+Clone the repository:
+
+```bash
+git clone https://github.com/VishwanathBabu/ai-health-assistant.git
+```
+
+Create a new branch:
+
+```bash
+git checkout -b feature-name
+```
+
+Commit changes:
+
+```bash
+git add .
+
+git commit -m "Describe your changes"
+```
+
+Push:
+
+```bash
+git push origin feature-name
+```
+
+Open a Pull Request on GitHub.
+
+---
+
+# Best Practices
+
+- Keep your `.env` file private.
+- Never commit API keys.
+- Re-index documents after uploading new files.
+- Test changes before pushing to GitHub.
+- Keep dependencies updated.
+- Use Docker for consistent environments when deploying or sharing the project.
+
+
+# Troubleshooting
+
+This section covers the most common issues encountered during setup and execution.
+
+---
+
+## FastAPI Does Not Start
+
+### Problem
+
+The server fails to start or exits immediately.
+
+### Solution
+
+Ensure the virtual environment is activated.
+
+```bash
+venv\Scripts\activate
+```
+
+Verify all dependencies are installed.
+
+```bash
+pip install -r requirements.txt
+```
+
+Then start the application again.
+
+```bash
+python -m uvicorn main:app --reload
+```
+
+---
+
+## Port 8000 Already in Use
+
+### Problem
+
+```
+Address already in use
+```
+
+### Solution
+
+Identify the process using the port.
+
+```bash
 netstat -ano | findstr :8000
+```
+
+Terminate the process.
+
+```bash
 taskkill /PID <PID_NUMBER> /F
 ```
-Or start on a different port:
-```
-uvicorn main:app --reload --host 0.0.0.0 --port 8001
+
+Or run the application on another port.
+
+```bash
+python -m uvicorn main:app --reload --port 8001
 ```
 
 ---
 
-**Problem:** `No module named 'fastapi'` or similar import error
-**Cause:** Dependencies not installed, or wrong Python environment active.
-**Solution:**
+## Ollama Not Running
+
+### Problem
+
+The application cannot connect to the language model.
+
+### Solution
+
+Start Ollama.
+
+```bash
+ollama serve
 ```
+
+Verify the installed models.
+
+```bash
+ollama list
+```
+
+---
+
+## Qdrant Not Running
+
+### Problem
+
+Semantic search does not return results.
+
+### Solution
+
+Start Qdrant.
+
+Verify it is healthy.
+
+```bash
+curl http://localhost:6333/healthz
+```
+
+Expected response:
+
+```text
+healthz check passed
+```
+
+---
+
+## Documents Are Not Retrieved
+
+### Problem
+
+The chat endpoint responds correctly, but no document sources are returned.
+
+### Solution
+
+Documents must be indexed before they become searchable.
+
+Execute:
+
+```text
+POST /documents/index
+```
+
+or
+
+```bash
+curl -X POST http://localhost:8000/documents/index
+```
+
+---
+
+## No Module Named ...
+
+### Problem
+
+```
+ModuleNotFoundError
+```
+
+### Solution
+
+Activate the virtual environment.
+
+```bash
 venv\Scripts\activate
+```
+
+Reinstall dependencies.
+
+```bash
 pip install -r requirements.txt
 ```
 
 ---
 
-**Problem:** `.env not found` warning in startup log
-**Cause:** You are running `uvicorn` from the wrong directory.
-**Solution:** Always `cd ai_health_assistant` first, then run `uvicorn main:app`.
+## Wrong Python Version
 
----
+Verify Python.
 
-**Problem:** Embedding model download is very slow or fails
-**Cause:** First run downloads `all-MiniLM-L6-v2` (~80 MB) from Hugging Face.
-**Solution:** Ensure you have internet access. The download happens once. After that, the model is cached in `~/.cache/huggingface/`.
-
----
-
-**Problem:** FastAPI startup fails with `RuntimeError: No API key found`
-**Cause:** `LLM_PROVIDER` is set to `openai` or `anthropic` but no key is provided.
-**Solution:** Either set the API key in `.env`, or set `LLM_PROVIDER=ollama`.
-
----
-
-**Problem:** `qdrant-client` or `sentence-transformers` not found
-**Cause:** Dependencies were not installed (they were commented out in the old requirements.txt).
-**Solution:** `pip install -r requirements.txt` — both packages are now active in Phase 2.
-
----
-
-**Problem:** Vector database connection error during `/documents/index`
-**Cause:** Qdrant went down after server startup.
-**Solution:** Restart Qdrant, then call `/documents/index` again. Existing chunks are not lost (Qdrant persists to disk).
-
----
-
-**Problem:** `pytest` fails with `ModuleNotFoundError`
-**Cause:** Tests are not being run from the project root, or the venv is not active.
-**Solution:**
+```bash
+python --version
 ```
-cd ai_health_assistant
-venv\Scripts\activate
+
+Expected:
+
+```text
+Python 3.10.x
+```
+
+If another version is used, recreate the virtual environment with Python 3.10.
+
+---
+
+# Frequently Asked Questions
+
+## Does the project require an OpenAI API key?
+
+No.
+
+By default the application uses **Ollama** with a locally hosted **Llama 3** model.
+
+---
+
+## Can I use OpenAI instead?
+
+Yes.
+
+Update the `.env` file.
+
+```
+LLM_PROVIDER=openai
+```
+
+Add your API key.
+
+```
+OPENAI_API_KEY=YOUR_API_KEY
+```
+
+---
+
+## Can I upload multiple documents?
+
+Yes.
+
+Upload as many supported documents as required.
+
+After uploading, rebuild the vector index.
+
+---
+
+## Which document formats are supported?
+
+Currently supported:
+
+- PDF
+- TXT
+- Markdown
+
+---
+
+## Does the project require Docker?
+
+No.
+
+Docker support is included for convenience, but the project runs perfectly using a Python virtual environment.
+
+---
+
+## Can I use another embedding model?
+
+Yes.
+
+The embedding model can be changed in the application configuration.
+
+---
+
+# Final Verification Checklist
+
+Before using the project, verify the following.
+
+## Environment
+
+- Python 3.10 installed
+- Virtual environment activated
+- Dependencies installed
+
+---
+
+## Ollama
+
+- Installed
+- Running
+- Llama 3 downloaded
+
+Verify:
+
+```bash
+ollama list
+```
+
+---
+
+## Qdrant
+
+Running successfully.
+
+Verify:
+
+```bash
+curl http://localhost:6333/healthz
+```
+
+---
+
+## FastAPI
+
+Server starts successfully.
+
+```bash
+python -m uvicorn main:app --reload
+```
+
+Swagger opens successfully.
+
+```
+http://localhost:8000/docs
+```
+
+---
+
+## Document Pipeline
+
+✔ Upload document
+
+↓
+
+✔ Build vector index
+
+↓
+
+✔ Perform semantic search
+
+↓
+
+✔ Chat with RAG enabled
+
+---
+
+## Tests
+
+Execute:
+
+```bash
 pytest tests/ -v
 ```
 
----
-
-## Step 10 — Final Verification Checklist
-
-Work through each item in order. Only move to the next item after the current one passes.
-
-```
-✓ Ollama is running
-  → ollama list  (shows llama3:latest)
-  → curl http://localhost:11434/api/generate -d "{\"model\":\"llama3\",\"prompt\":\"say ok\",\"stream\":false}"
-
-✓ Qdrant is running
-  → curl http://localhost:6333/healthz  (returns: "healthz check passed")
-
-✓ FastAPI starts successfully
-  → uvicorn main:app --reload --host 0.0.0.0 --port 8000
-  → Look for: "Orchestrator ready — all agents initialised."
-  → Look for: "Qdrant connected at http://localhost:6333"
-
-✓ /health works
-  → curl http://localhost:8000/health
-  → status == "ok", rag_enabled == true
-
-✓ /health/ready works
-  → curl http://localhost:8000/health/ready
-  → status == "ready", llm_reachable == true, qdrant_reachable == true
-
-✓ Documents upload successfully
-  → curl -X POST http://localhost:8000/documents/upload -F "file=@your_doc.txt"
-  → status == "uploaded"
-
-✓ Documents are indexed
-  → curl -X POST http://localhost:8000/documents/index
-  → status == "ok", total_chunks_indexed > 0
-
-✓ Retrieval returns relevant chunks
-  → curl "http://localhost:8000/knowledge/search?q=fever&top_k=3"
-  → results_count > 0, results[0].score > 0.3
-
-✓ Chat uses retrieved medical knowledge
-  → curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" -d "{\"message\":\"I have fever for 3 days\",\"use_rag\":true}"
-  → rag_active == true, sources_used is non-empty
-
-✓ Existing Phase 1 features still work
-  → curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" -d "{\"message\":\"I have chest pain and can't breathe\"}"
-  → response contains "EMERGENCY" or "URGENT"
-
-✓ Existing tests pass
-  → pytest tests/test_mvp.py -v
-  → All tests PASSED
-
-✓ New tests pass
-  → pytest tests/test_phase2.py -v
-  → All tests PASSED
-```
+All tests should pass successfully.
 
 ---
 
-## Project Structure
+# Contributing
 
+Contributions are welcome.
+
+If you would like to improve the project:
+
+1. Fork the repository.
+2. Create a new branch.
+
+```bash
+git checkout -b feature-name
 ```
-ai_health_assistant/
-├── main.py                       # FastAPI app — all endpoints including Phase 2
-├── .env                          # Environment variables
-├── requirements.txt              # Python dependencies (Phase 2 packages active)
-├── pyproject.toml                # Build config
-├── conftest.py                   # Pytest root marker
-├── core/
-│   ├── config.py                 # Settings (includes QDRANT_URL, QDRANT_COLLECTION)
-│   ├── logger.py                 # Structured logging
-│   └── orchestrator.py          # Pipeline (now includes RAG retrieval step)
-├── agents/
-│   ├── base_agent.py             # Abstract base — LLM dispatch, timeout, fallback
-│   ├── router_agent.py           # Intent classification
-│   ├── symptom_agent.py          # Symptom extraction
-│   ├── emergency_agent.py        # Emergency detection
-│   └── safety_agent.py          # Final response composer (Phase 2: RAG context)
-├── knowledge/
-│   ├── __init__.py
-│   ├── store.py                  # Qdrant wrapper + sentence-transformers embedding
-│   ├── chunker.py                # Text/PDF chunking
-│   └── ingestion.py              # File → chunks → Qdrant pipeline
-├── documents/
-│   └── uploads/                  # Uploaded documents land here
-└── tests/
-    ├── test_mvp.py               # Phase 1 tests (unchanged)
-    └── test_phase2.py            # Phase 2 tests (RAG, store, chunker, ingestion)
+
+3. Make your changes.
+4. Commit.
+
+```bash
+git commit -m "Describe your changes"
 ```
+
+5. Push.
+
+```bash
+git push origin feature-name
+```
+
+6. Open a Pull Request.
 
 ---
 
-# OCR Setup (Phase 3 — Image PDF Support)
+# License
 
-## What changed
+This project is released under the **MIT License**.
 
-The ingestion pipeline now automatically detects whether a PDF has a text layer. If it does not (e.g. WHO PDFs saved from a browser as image scans), it falls back to OCR using **Tesseract** and **pdf2image**.
-
-Text-based PDFs still go through pypdf only — OCR never runs on them.
-
-The new response field `ocr_used: true/false` tells you which path was taken.
+You are free to use, modify, and distribute the project under the terms of the license.
 
 ---
 
-## New files
+# Support
 
-| File | Purpose |
-|---|---|
-| `knowledge/ocr.py` | OCR logic — Tesseract dispatch, text cleaning |
-| `tests/test_ocr.py` | 28 tests for OCR path, cleaning, and fallback handling |
+If you encounter any issues while using this project, please open an issue in the GitHub repository.
 
-## Modified files
-
-| File | Change |
-|---|---|
-| `knowledge/ingestion.py` | Added OCR fallback in `_process_pdf()` |
-| `requirements.txt` | Added `pytesseract`, `pdf2image`, `Pillow` |
+Bug reports, feature requests, and pull requests are always welcome.
 
 ---
 
-## Step-by-step OCR installation (Windows 11)
+# Acknowledgements
 
-### 1. Install Python packages
+This project makes use of several excellent open-source technologies:
 
-These are already in `requirements.txt` and installed with `pip install -r requirements.txt`:
+- FastAPI
+- Ollama
+- Qdrant
+- Sentence Transformers
+- PyPDF
+- Pytest
+- Pydantic
 
-- `pytesseract==0.3.13`
-- `pdf2image==1.17.0`
-- `Pillow==10.3.0`
-
-### 2. Install Tesseract binary
-
-pytesseract is a Python wrapper. It needs the Tesseract binary installed separately.
-
-**Download the Windows installer:**
-
-Go to: https://github.com/UB-Mannheim/tesseract/wiki
-
-Download: `tesseract-ocr-w64-setup-5.x.x.exe` (use the latest 5.x version)
-
-**Run the installer:**
-
-- Accept defaults
-- On the "Choose Components" screen, make sure "Add to PATH" is checked
-- Recommended install path: `C:\Program Files\Tesseract-OCR\`
-
-**Restart your terminal** after installation.
-
-**Verify Tesseract is installed:**
-```
-tesseract --version
-```
-
-Expected output:
-```
-tesseract 5.3.4
- ...
-```
-
-**If you did not add to PATH during install**, add it manually:
-1. Open System Properties → Environment Variables
-2. Under System Variables, select `Path` → Edit
-3. Add: `C:\Program Files\Tesseract-OCR\`
-4. Click OK and restart terminal
-
-### 3. Install Poppler (required by pdf2image)
-
-pdf2image converts PDF pages to images. It needs Poppler.
-
-**Download:**
-
-Go to: https://github.com/oschwartz10612/poppler-windows/releases
-
-Download the latest `Release-xx.xx.x-0.zip`
-
-**Extract and add to PATH:**
-
-1. Extract to `C:\poppler\`
-2. Add `C:\poppler\Library\bin` to your System PATH (same steps as above)
-3. Restart terminal
-
-**Verify Poppler:**
-```
-pdftoppm -v
-```
-
-Expected output:
-```
-pdftoppm version 24.x.x
-```
-
-### 4. Verify OCR works end-to-end
-
-Start the server, upload a scanned PDF, and index it:
-
-```
-curl -X POST http://localhost:8000/documents/upload -F "file=@C:\path\to\who_guide.pdf"
-curl -X POST http://localhost:8000/documents/index
-```
-
-If OCR ran, the index response will include:
-```json
-{"ocr_used": true, "chunks_created": 35, "status": "ok"}
-```
+Special thanks to the maintainers and contributors of these projects for their work.
 
 ---
 
-## Troubleshooting OCR
+# Conclusion
 
-**Problem:** `TesseractNotFoundError: tesseract is not installed`
-**Cause:** Tesseract binary not in PATH.
-**Solution:** Install from https://github.com/UB-Mannheim/tesseract/wiki and add to PATH.
+You have now completed the setup of the AI Health Assistant.
 
----
+The application is ready to:
 
-**Problem:** `pdf2image failed to convert ... Is Poppler installed`
-**Cause:** Poppler not installed or not in PATH.
-**Solution:** Download from https://github.com/oschwartz10612/poppler-windows/releases, extract, add `Library\bin` to PATH.
+- Upload and index medical documents
+- Perform semantic search using Qdrant
+- Generate context-aware healthcare responses using Retrieval-Augmented Generation (RAG)
+- Run locally with Ollama and FastAPI
+- Execute automated unit tests
+- Run inside Docker
 
----
-
-**Problem:** OCR runs but produces garbage text
-**Cause:** PDF scan quality is very low, or non-English content without language pack.
-**Solution:** For non-English PDFs, install the Tesseract language pack (e.g. `tesseract-ocr-w64-setup-5.x.x.exe` → Additional languages).
-
----
-
-**Problem:** OCR is very slow
-**Cause:** High DPI setting (300 DPI default) on a large multi-page PDF.
-**Solution:** This is expected. A 50-page WHO PDF takes approximately 30–90 seconds depending on your CPU. The result is cached in Qdrant and subsequent searches are instant.
-
----
-
-**Problem:** `ocr_used: false` even for a scanned PDF
-**Cause:** pypdf extracted some text (e.g. embedded metadata or a few characters) that crossed the minimum threshold.
-**Solution:** Check the actual search results with `/knowledge/search?q=your+query`. If results look correct, OCR was not needed. If results are empty or nonsense, re-index with `?recreate=true`.
-
----
-
-## Running tests
-
-Run all tests (no Tesseract or Poppler required — all mocked):
-
-```
-pytest tests/ -v
-```
-
-Run only OCR tests:
-
-```
-pytest tests/test_ocr.py -v
-```
-
-Expected output:
-```
-tests/test_ocr.py::TestHasTextLayer::test_page_with_sufficient_text_returns_true PASSED
-tests/test_ocr.py::TestHasTextLayer::test_all_empty_pages_returns_false PASSED
-...
-28 passed in 0.14s
-```
+For an overview of the project architecture, features, and screenshots, refer to the main **README.md**.
